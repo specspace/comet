@@ -31,7 +31,7 @@ type message struct {
 }
 
 func main() {
-	server, err := mc.NewVanillaServer("1.16.4")
+	server, err := mc.NewVanillaServer(mc.LatestServerVersion)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -7,7 +7,14 @@ import (
 	"os/exec"
 )
 
-const minecraftServerJarFilePath = "./minecraft_server.jar"
+const (
+	LatestServerVersion         = "latest"
+	LatestSnapshotServerVersion = "latest-snapshot"
+)
+
+const (
+	minecraftServerJarFilePath = "./minecraft_server.jar"
+)
 
 type Server struct {
 	*exec.Cmd

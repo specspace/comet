@@ -77,6 +77,12 @@ func fetchGameVersionInfoURL(version string) (string, error) {
 		return "", err
 	}
 
+	if version == LatestServerVersion {
+		version = versionManifest.Latest.Release
+	} else if version == LatestSnapshotServerVersion {
+		version = versionManifest.Latest.Snapshot
+	}
+
 	for _, gv := range versionManifest.Versions {
 		if gv.ID == version {
 			return gv.URL, nil
