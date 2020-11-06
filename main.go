@@ -5,24 +5,21 @@ import (
 	"bytes"
 	"errors"
 	"github.com/gorilla/websocket"
+	"github.com/specspace/comet/mc"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"sync"
 	"time"
 )
-
-const minecraftServerJarFileName = "minecraft_server.jar"
 
 var (
 	stdin     io.Writer
 	stdout    io.Reader
 	connsLock sync.RWMutex
 	conns     []*websocket.Conn
-	wg        sync.WaitGroup
 	logRegexp = regexp.MustCompile("\\[(\\d{2}:\\d{2}:\\d{2})\\] \\[(.*)\\/(\\w*)\\]: (.*)")
 )
 
@@ -34,15 +31,24 @@ type message struct {
 }
 
 func main() {
-	if err := downloadVanilla(); err != nil {
+	server, err := mc.NewVanillaServer("1.16.4")
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	wg.Add(1)
-	go execServer()
-	log.Println("starting mc")
-	wg.Wait()
-	log.Println("mc started")
+	stdin, err = server.StdinPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+	stdout, err = server.StdoutPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := server.Start(); err != nil {
+		log.Fatal(err)
+	}
+
 	go sendOutLoop()
 
 	http.HandleFunc("/", wsEndpoint)
@@ -60,7 +66,7 @@ func sendOutLoop() {
 
 		message, err := parseLine(line)
 		if err != nil {
-			log.Println("could not parse line: ", err)
+			log.Println("could not parse line: ", string(line))
 			continue
 		}
 
@@ -126,42 +132,4 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 		io.Copy(stdin, bytes.NewReader(p))
 	}
 	conn.Close()
-}
-
-func downloadVanilla() error {
-	resp, err := http.Get("https://launcher.mojang.com/v1/objects/35139deedbd5182953cf1caa23835da59ca3d7cd/server.jar")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	out, err := os.Create(minecraftServerJarFileName)
-	if err != nil {
-		return nil
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	return err
-}
-
-func execServer() error {
-	cmd := exec.Command("java", "-jar", minecraftServerJarFileName)
-	var err error
-	stdin, err = cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err = cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	wg.Done()
-	log.Println("i did")
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-
-	return cmd.Wait()
 }
