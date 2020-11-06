@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"github.com/gorilla/websocket"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"sync"
+	"time"
 )
 
 const minecraftServerJarFileName = "minecraft_server.jar"
@@ -20,7 +23,15 @@ var (
 	connsLock sync.RWMutex
 	conns     []*websocket.Conn
 	wg        sync.WaitGroup
+	logRegexp = regexp.MustCompile("\\[(\\d{2}:\\d{2}:\\d{2})\\] \\[(.*)\\/(\\w*)\\]: (.*)")
 )
+
+type message struct {
+	Timestamp time.Time `json:"timestamp"`
+	Origin    string    `json:"origin"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+}
 
 func main() {
 	if err := downloadVanilla(); err != nil {
@@ -45,17 +56,45 @@ func sendOutLoop() {
 		if err != nil && err != io.EOF {
 			break
 		}
-
 		os.Stdout.Write(line)
+
+		message, err := parseLine(line)
+		if err != nil {
+			log.Println("could not parse line: ", err)
+			continue
+		}
+
 		connsLock.RLock()
 		for _, conn := range conns {
-			err := conn.WriteMessage(1, line)
+			err := conn.WriteJSON(message)
 			if err != nil {
+				log.Println(err)
 				conn.Close()
 			}
 		}
 		connsLock.RUnlock()
 	}
+}
+
+func parseLine(data []byte) (message, error) {
+	//  timestamp  origin        level  message
+	// [14:10:49] [Server thread/INFO]: There are 0 of a max of 20 players online:
+	matches := logRegexp.FindStringSubmatch(string(data))
+	if len(matches) < 5 {
+		return message{}, errors.New("invalid console output")
+	}
+
+	timestamp, err := time.Parse("15:04:05", matches[1])
+	if err != nil {
+		return message{}, err
+	}
+
+	return message{
+		Timestamp: timestamp,
+		Origin:    matches[2],
+		Level:     matches[3],
+		Message:   matches[4],
+	}, nil
 }
 
 var upgrader = websocket.Upgrader{
