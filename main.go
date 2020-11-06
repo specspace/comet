@@ -9,13 +9,17 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sync"
 )
 
 const minecraftServerJarFileName = "minecraft_server.jar"
 
 var (
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
+	stdin     io.Writer
+	stdout    io.Reader
+	connsLock sync.RWMutex
+	conns     []*websocket.Conn
+	wg        sync.WaitGroup
 )
 
 func main() {
@@ -23,12 +27,35 @@ func main() {
 		log.Fatal(err)
 	}
 
-	go func() {
-		log.Fatal(execServer())
-	}()
+	wg.Add(1)
+	go execServer()
+	log.Println("starting mc")
+	wg.Wait()
+	log.Println("mc started")
+	go sendOutLoop()
 
 	http.HandleFunc("/", wsEndpoint)
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func sendOutLoop() {
+	reader := bufio.NewReader(stdout)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			break
+		}
+
+		os.Stdout.Write(line)
+		connsLock.RLock()
+		for _, conn := range conns {
+			err := conn.WriteMessage(1, line)
+			if err != nil {
+				conn.Close()
+			}
+		}
+		connsLock.RUnlock()
+	}
 }
 
 var upgrader = websocket.Upgrader{
@@ -47,12 +74,9 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.WriteMessage(1, []byte("hello"))
 
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			conn.WriteMessage(1, scanner.Bytes())
-		}
-	}()
+	connsLock.Lock()
+	conns = append(conns, conn)
+	connsLock.Unlock()
 
 	for {
 		_, p, err := conn.ReadMessage()
@@ -62,6 +86,7 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 		p = append(p, 0x0A)
 		io.Copy(stdin, bytes.NewReader(p))
 	}
+	conn.Close()
 }
 
 func downloadVanilla() error {
@@ -92,6 +117,8 @@ func execServer() error {
 	if err != nil {
 		return err
 	}
+	wg.Done()
+	log.Println("i did")
 
 	if err := cmd.Start(); err != nil {
 		return err
