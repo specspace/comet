@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"github.com/gorilla/websocket"
 	"io"
 	"log"
 	"net/http"
@@ -10,12 +13,55 @@ import (
 
 const minecraftServerJarFileName = "minecraft_server.jar"
 
+var (
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+)
+
 func main() {
 	if err := downloadVanilla(); err != nil {
 		log.Fatal(err)
 	}
 
-	log.Println(execServer(os.Stdin, os.Stdout))
+	go func() {
+		log.Fatal(execServer())
+	}()
+
+	http.HandleFunc("/", wsEndpoint)
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+func wsEndpoint(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	conn.WriteMessage(1, []byte("hello"))
+
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			conn.WriteMessage(1, scanner.Bytes())
+		}
+	}()
+
+	for {
+		_, p, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		p = append(p, 0x0A)
+		io.Copy(stdin, bytes.NewReader(p))
+	}
 }
 
 func downloadVanilla() error {
@@ -35,10 +81,17 @@ func downloadVanilla() error {
 	return err
 }
 
-func execServer(in io.Reader, out io.Writer) error {
+func execServer() error {
 	cmd := exec.Command("java", "-jar", minecraftServerJarFileName)
-	cmd.Stdin = in
-	cmd.Stdout = out
+	var err error
+	stdin, err = cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err = cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
 
 	if err := cmd.Start(); err != nil {
 		return err
