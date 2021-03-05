@@ -11,6 +11,6 @@ RUN apk --no-cache add ca-certificates
 WORKDIR /
 RUN mkdir configs
 COPY --from=builder main ./
-COPY --from=builder eula.txt ./
+RUN echo "eula=$MC_EULA" > eula.txt
 RUN chmod +x ./main
 ENTRYPOINT [ "./main" ]
